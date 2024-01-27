@@ -2,23 +2,24 @@ let
   rust_overlay = import (builtins.fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz");
 
   pkgs = import <nixos-23.11> { overlays = [ rust_overlay ]; };
-  unstable = import <nixos-unstable> {};
+  unstable = import <nixos-unstable> { overlays = [ rust_overlay ]; };
 
-  rust = pkgs.rust-bin.stable."1.74.0".default.override {
-    extensions = [ "rust-src" ];
-  };
-  # rust = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
+  # rust = pkgs.rust-bin.stable."1.74.0".default.override {
   #   extensions = [ "rust-src" ];
-  # });
+  # };
+  rust = unstable.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
+    extensions = [ "rust-src" ];
+  });
 
 in
   pkgs.mkShell {
-    nativeBuildInputs = with pkgs; [
-    nixd
-    gcc
-    rust
-    rust-analyzer
-    # dep
+    nativeBuildInputs = [
+    unstable.nixd # language server for nix files
+
+    rust # overlay package (unstable)
+    unstable.rust-analyzer
+
+    ### dep ###
     # openssl
     # pkg-config
   ];
