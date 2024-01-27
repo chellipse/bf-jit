@@ -1,7 +1,6 @@
 use std::env;
 use std::fs::read_to_string;
 use std::process::exit;
-use std::collections::HashMap;
 
 // attempts to read the first arg as file to string
 // will Panic! if the file doesn't exist or cannot be read
