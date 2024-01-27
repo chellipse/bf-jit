@@ -1,6 +1,153 @@
 use std::env;
 use std::fs::read_to_string;
 use std::process::exit;
+use std::mem::transmute;
+use vonneumann::ExecutableMemory;
+
+const PAGE_SIZE: usize = 4096;
+const COMMANDS: [char; 8] = ['+','-','>','<','.',',','[',']'];
+const MAX_MEM: usize = 2048;
+
+// #[derive(Debug, Clone, Copy)]
+// enum CMD {
+//     Plus(usize),
+//     Minus(usize),
+//     PtrR(usize),
+//     PtrL(usize),
+//     Push(usize),
+//     Pull(usize),
+//     JmpR(usize),
+//     JmpL(usize),
+// }
+
+fn get_32bit_offset(jump_from: usize, jump_to: usize) -> u32 {
+    // dbg!(jump_from, jump_to);
+    if jump_to >= jump_from {
+        let diff = jump_to - jump_from;
+        // dbg!(diff);
+        // dbg!(diff as u32);
+        // assert!(diff < (1u64 << 31));
+        return diff as u32;
+    } else {
+        // Here the diff is negative, so we need to encode it as 2's complement.
+        let diff = jump_from - jump_to;
+        // dbg!(diff);
+        // dbg!(diff as u32);
+        // println!("WRAP: {}", !(diff as u32).wrapping_sub(1) as i32);
+        // dbg!(!(diff as u32).wrapping_sub(1));
+        // assert!(diff - 1 < (1u64 << 31));
+        let diff_unsigned = diff as u32;
+        return !diff_unsigned.wrapping_sub(1);
+    }
+}
+
+struct Buff {
+    data: Vec<u8>,
+    stack: Vec<usize>,
+}
+
+impl<'a> Buff {
+    fn push(&mut self, v: u8) {
+        self.data.push(v);
+    }
+    fn append(&mut self, vec: Vec<u8>) {
+        for v in vec {
+            self.push(v)
+        }
+    }
+    fn stack(&mut self, v: usize) {
+        self.stack.push(v);
+    }
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+    fn u32(&mut self, value: u32) {
+        let bytes = value.to_le_bytes();
+        self.data.extend_from_slice(&bytes);
+    }
+    fn u64(&mut self, value: u64) {
+        let bytes = value.to_le_bytes();
+        self.data.extend_from_slice(&bytes);
+    }
+    fn replace_u32(&mut self, value: u32, index: usize) {
+        let bytes = value.to_le_bytes();
+        for (i, &byte) in bytes.iter().enumerate() {
+            if let Some(elem) = self.data.get_mut(index + i) {
+                *elem = byte;
+            }
+        }
+    }
+    fn encode(&mut self, cmds: Vec<char>) {
+        for char in cmds {
+            match char {
+                '+' => {
+                    self.append(vec![0x41, 0x80, 0x45, 0x00, 0x01]);
+                },
+                '-' => {
+                    self.append(vec![0x41, 0x80, 0x6D, 0x00, 0x01]);
+                },
+                '>' => {
+                    self.append(vec![0x49, 0xFF, 0xC5]);
+                },
+                '<' => {
+                    self.append(vec![0x49, 0xFF, 0xCD]);
+                },
+                '.' => {
+                    self.append(vec![0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]);
+                    self.append(vec![0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00]);
+                    self.append(vec![0x4C, 0x89, 0xEE]);
+                    self.append(vec![0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00]);
+                    self.append(vec![0x0F, 0x05]);
+                },
+                ',' => {
+                    self.append(vec![0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00]);
+                    self.append(vec![0x48, 0xC7, 0xC7, 0x00, 0x00, 0x00, 0x00]);
+                    self.append(vec![0x4C, 0x89, 0xEE]);
+                    self.append(vec![0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00]);
+                    self.append(vec![0x0F, 0x05]);
+                },
+                '[' => {
+                    self.append(vec![0x41, 0x80, 0x7D, 0x00, 0x00]);
+                    self.stack(self.len());
+                    self.append(vec![0x0F, 0x84]);
+                    self.u32(0_u32);
+                },
+                ']' => {
+                    match self.stack.pop() {
+                        None => {
+                            eprintln!("Mismatched brackets @: {}", self.data.len());
+                            break
+                        },
+                        Some(open_offset) => {
+                            // println!("{:?}", open_offset);
+                            self.append(vec![0x41, 0x80, 0x7D, 0x00, 0x00]);
+                            // get offset for jmp back
+                            let jmp_bk_from = self.len() + 6;
+                            let jmp_bk_to = open_offset + 6;
+                            let rel_jmp_bk_offset = get_32bit_offset(jmp_bk_from, jmp_bk_to);
+                            // make jmp
+                            self.append(vec![0x0F, 0x85]);
+                            self.u32(rel_jmp_bk_offset);
+                            // dbg!(rel_jmp_bk_offset as i32);
+                            // get offset for jmp forward
+                            let jmp_fw_from = open_offset + 6;
+                            let jmp_fw_to = self.len();
+                            let rel_jmp_fw_offset = get_32bit_offset(jmp_fw_from, jmp_fw_to);
+                            // dbg!(rel_jmp_fw_offset);
+                            self.replace_u32(rel_jmp_fw_offset, open_offset + 2);
+                            // dbg!(self.data[open_offset + 2]);
+                            // dbg!(self.data[open_offset + 3]);
+                            // dbg!(self.data[open_offset + 4]);
+                            // dbg!(self.data[open_offset + 5]);
+                        },
+                    }
+                },
+                _ => {
+                },
+            }
+        }
+    }
+}
 
 // attempts to read the first arg as file to string
 // will Panic! if the file doesn't exist or cannot be read
@@ -21,278 +168,165 @@ fn read_input_file() -> String {
     }
 }
 
-fn jmp_look_right(mut ip: usize, code: &Vec<CMD>) -> usize {
-    let mut brack_ct = 1;
-    // println!("IP: {}", ip);
-    ip += 1;
-    while brack_ct > 0 && ip < code.len() && ip > 0 {
-        match code[ip] {
-            CMD::JmpL(_) => {
-                brack_ct -= 1;
-                if brack_ct == 0 {
-                    break
-                }
-                ip += 1;
-            },
-            CMD::JmpR(_) => {
-                brack_ct += 1;
-                ip += 1;
-            },
-            _ => {
-                ip += 1;
-            },
+// fn parse(code: &mut Vec<char>) -> Vec<CMD> {
+//     let mut map: Vec<CMD> = vec![];
+//     code.push(' ');
+//     let mut i = 0;
+//     while i < code.len() {
+//         match code[i] {
+//             '+' => {
+//                 let mut l = 0;
+//                 while code[i] == '+' {
+//                     i += 1;
+//                     l += 1;
+//                 }
+//                 map.push(CMD::Plus(l));
+//             },
+//             '-' => {
+//                 let mut l = 0;
+//                 while code[i] == '-' {
+//                     i += 1;
+//                     l += 1;
+//                 }
+//                 map.push(CMD::Minus(l));
+//             },
+//             '>' => {
+//                 let mut l = 0;
+//                 while code[i] == '>' {
+//                     i += 1;
+//                     l += 1;
+//                 }
+//                 map.push(CMD::PtrR(l));
+//             },
+//             '<' => {
+//                 let mut l = 0;
+//                 while code[i] == '<' {
+//                     i += 1;
+//                     l += 1;
+//                 }
+//                 map.push(CMD::PtrL(l));
+//             },
+//             '.' => {
+//                 let mut l = 0;
+//                 while code[i] == '.' {
+//                     i += 1;
+//                     l += 1;
+//                 }
+//                 map.push(CMD::Push(l));
+//             },
+//             ',' => {
+//                 let mut l = 0;
+//                 while code[i] == ',' {
+//                     i += 1;
+//                     l += 1;
+//                 }
+//                 map.push(CMD::Pull(l));
+//             },
+//             '[' => {
+//                 map.push(CMD::JmpR(0));
+//                 i += 1;
+//             },
+//             ']' => {
+//                 map.push(CMD::JmpL(0));
+//                 i += 1;
+//             },
+//             _ => {
+//                 i += 1;
+//             },
+//         }
+//     }
+//     map
+// }
+
+fn show_hex_32(bytes: &Vec<u8>) {
+    let mut ct = 0;
+    for byte in bytes {
+        print!("{:02X} ", byte);
+        ct += 1;
+        if ct % 16 == 0 {
+            println!("")
         }
     }
-    // println!("BLR: {}", ip);
-    ip
+    if !(ct % 16 == 0) {
+        println!("")
+    }
 }
 
-fn jmp_look_left(mut ip: usize, code: &Vec<CMD>) -> usize {
-    let mut brack_ct = 1;
-    ip -= 1;
-    while brack_ct > 0 && ip < code.len() && ip > 0 {
-        match code[ip] {
-            CMD::JmpL(_) => {
-                brack_ct += 1;
-                ip -= 1;
-            },
-            CMD::JmpR(_) => {
-                brack_ct -= 1;
-                if brack_ct == 0 {
-                    break
-                }
-                ip -= 1;
-            },
-            _ => {
-                ip -= 1;
-            },
+fn show_hex_64(bytes: &Vec<u8>) {
+    let mut ct = 0;
+    for byte in bytes {
+        print!("{:02X} ", byte);
+        ct += 1;
+        if ct % 32 == 0 {
+            println!("")
         }
     }
-    // println!("BLL: {}", ip);
-    ip
-}
-
-fn add_jmp_values(mut code: Vec<CMD>) -> Vec<CMD> {
-    let copy = code.clone();
-    for (index, c) in code.iter_mut().enumerate() {
-        match c {
-            CMD::JmpR(val) => {
-                let value = jmp_look_right(index, &copy);
-                *val = value;
-            }
-            CMD::JmpL(val) => {
-                let value = jmp_look_left(index, &copy);
-                *val = value;
-            }
-            _ => {}
-        }
+    if !(ct % 32 == 0) {
+        println!("")
     }
-    code
-}
-
-fn parse(code: &mut Vec<char>) -> Vec<CMD> {
-    let mut map: Vec<CMD> = vec![];
-
-    code.push(' ');
-    let mut i = 0;
-    while i < code.len() {
-        match code[i] {
-            '+' => {
-                // println!("C: {}, I: {}", code[i], i);
-                let mut l = 0;
-                while code[i] == '+' {
-                    i += 1;
-                    l += 1;
-                }
-                map.push(CMD::Plus(l));
-            },
-            '-' => {
-                // println!("C: {}", code[i]);
-                let mut l = 0;
-                while code[i] == '-' {
-                    i += 1;
-                    l += 1;
-                }
-                map.push(CMD::Minus(l));
-            },
-            '>' => {
-                // println!("C: {}", code[i]);
-                let mut l = 0;
-                while code[i] == '>' {
-                    i += 1;
-                    l += 1;
-                }
-                map.push(CMD::PtrR(l));
-            },
-            '<' => {
-                // println!("C: {}", code[i]);
-                let mut l = 0;
-                while code[i] == '<' {
-                    i += 1;
-                    l += 1;
-                }
-                map.push(CMD::PtrL(l));
-            },
-            '.' => {
-                // println!("C: {}", code[i]);
-                let mut l = 0;
-                while code[i] == '.' {
-                    i += 1;
-                    l += 1;
-                }
-                map.push(CMD::Push(l));
-            },
-            ',' => {
-                // println!("C: {}", code[i]);
-                let mut l = 0;
-                while code[i] == ',' {
-                    i += 1;
-                    l += 1;
-                }
-                map.push(CMD::Pull(l));
-            },
-            '[' => {
-                // println!("C: {}", code[i]);
-                map.push(CMD::JmpR(0));
-                i += 1;
-            },
-            ']' => {
-                // println!("C: {}", code[i]);
-                map.push(CMD::JmpL(0));
-                i += 1;
-            },
-            _ => {
-                // println!("C: {}", code[i]);
-                i += 1;
-            },
-        }
-    }
-    map
-}
-
-#[derive(Debug, Clone, Copy)]
-enum CMD {
-    Plus(usize),
-    Minus(usize),
-    PtrR(usize),
-    PtrL(usize),
-    Push(usize),
-    Pull(usize),
-    JmpR(usize),
-    JmpL(usize),
 }
 
 fn main() {
     // read first arg as file to string
     let data: String = read_input_file();
 
-    const COMMANDS: [char; 8] = ['+','-','>','<','.',',','[',']'];
     let mut code_txt: Vec<char> = data.chars()
                               .collect();
     // filter code_txt
     code_txt.retain(|&c| COMMANDS.contains(&c));
 
     // parse into CST
-    let parsed_code = parse(&mut code_txt);
+    // let parsed_code = parse(&mut code_txt);
 
     // add Jmp values to CST
-    let code: Vec<CMD> = add_jmp_values(parsed_code);
+    // let code: Vec<CMD> = add_jmp_values(parsed_code);
 
-    println!("CODE LEN: {:?}", code_txt.len());
-    println!("CST LEN: {:?}", code.len());
-    let mut ip: usize = 0;
+    // init runtime mem
+    let mem: [u8; MAX_MEM] = [0; MAX_MEM];
 
-    const MAX: usize = 2048;
-    let mut mem: [u8; MAX] = [0; MAX];
-    let mut mp: usize = 0;
+    let mut buffer = Buff {
+        data: vec![], // where our code is stored
+        stack: vec![], // used for tracking jmp offsets
+    };
 
-    // let max_loop = 64000;
-    // let mut loop_ct: u128 = 0;
-    // instruction count
-    // let mut inst_ct: u128 = 0;
+    buffer.push(0x49);
+    buffer.push(0xbd);
+    buffer.u64(mem.as_ptr() as u64);
 
-    println!("--- START ---");
+    buffer.encode(code_txt);
+
+    buffer.push(0xc3);
+    // dbg!(mem.as_ptr());
+    // println!("buffer len: {:?}", buffer.len());
+    let len = buffer.len();
+
+    dbg!(len / PAGE_SIZE + 1);
+    // let mut code = ExecutableMemory::new(
+    //     len / PAGE_SIZE + 1
+    // );
+    // code.as_slice_mut()[..buffer.len()].copy_from_slice(&buffer.data);
+    let code = ExecutableMemory::with_contents(&buffer.data);
+
+    // println!("PROGRAM CODE: ");
+    // show_hex_64(&buffer.data);
+
+    let rows = (828-(828 % 32)) / 32;
+    let extra = len%32;
+    println!("PROGRAM LEN: {}*64 + {}", rows, extra);
+
     let time = std::time::Instant::now();
-    // let start = time.elapsed().as_nanos();
-    let start = time.elapsed().as_micros();
-    while ip < code.len() && mp <= MAX {
-        match code[ip] {
-            CMD::Plus(n) => {
-                // print!("+");
-                mem[mp] += n as u8;
-                ip += 1;
-                // inst_ct += n as u128;
-            },
-            CMD::Minus(n) => {
-                // print!("-");
-                mem[mp] -= n as u8;
-                ip += 1;
-                // inst_ct += n as u128;
-            },
-            CMD::PtrR(n) => {
-                // print!(">");
-                mp += n;
-                ip += 1;
-                // inst_ct += n as u128;
-            },
-            CMD::PtrL(n) => {
-                // print!("<");
-                mp -= n;
-                ip += 1;
-                // inst_ct += n as u128;
-            },
-            CMD::Push(n) => {
-                // print!(".");
-                for _ in 0..n {
-                    print!("{}", char::from(mem[mp]));
-                }
-                ip += 1;
-                // inst_ct += n as u128;
-            },
-            CMD::Pull(_) => {
-                todo!();
-                // ip += 1;
-            },
-            CMD::JmpR(n) => {
-                // print!("[");
-                // println!("![: {}[{}], IP: {}", mp, mem[mp], ip);
-                if mem[mp] == 0 {
-                    // println!("[: {}[{}], IP: {}", mp, mem[mp], ip);
-                    // ip = brack_right(ip, &code);
-                    ip = n;
-                } else {
-                    ip += 1;
-                }
-                // inst_ct += 1 as u128;
-            },
-            CMD::JmpL(n) => {
-                // print!("]");
-                // println!("!]: {}[{}], IP: {}", mp, mem[mp], ip);
-                if mem[mp] != 0 {
-                    // println!("]: {}[{}], IP: {}", mp, mem[mp], ip);
-                    // ip = brack_left(ip, &code);
-                    ip = n;
-                } else {
-                    ip += 1;
-                }
-                // inst_ct += 1 as u128;
-            },
-        }
-        // loop_ct += 1;
-        // if loop_ct == max_loop {
-        //     println!("LOOP OVERFLOW: {}", max_loop);
-        //     break
-        // }
-        // println!("IP: [{}] --- MP: [{}]", ip, mp);
-        // println!("IP: [{}] --- MP: [{}] --- MEM: {:?}", ip, mp, mem);
+    println!("--- START ---");
+    let mark1 = time.elapsed().as_micros();
+    unsafe {
+        let f = transmute::<*mut u8, unsafe fn()>(code.as_ptr());
+        f();
     }
-    // let end = time.elapsed().as_nanos() - start;
-    let end = time.elapsed().as_micros() - start;
+    let mark2 = time.elapsed().as_micros();
     println!("\n--- END ---");
-    // println!("MP: [{}], IP: [{}]", mp, ip);
-    println!("TIME: {}s {}ms {}μs", (end / 1000000), (end / 1000), (end % 1000 ));
-    // println!("Loops: {}", loop_ct);
-    // println!("Inst: {}", inst_ct);
-    // println!("MEM: {:?}", mem);
+
+    let diff = mark2-mark1;
+    println!("PROGRAM RUNTIME: {}s {}ms {}us", (diff/1000/1000), (diff/1000%1000), diff%1000);
+    // println!("PROGRAM MEM: {:?}", mem);
+    // println!("{:?}", code);
 }
 
