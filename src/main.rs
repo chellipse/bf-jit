@@ -4,10 +4,8 @@ use std::process::exit;
 use std::mem::transmute;
 use vonneumann::ExecutableMemory;
 
-const PAGE_SIZE: usize = 4096;
 const COMMANDS: [char; 8] = ['+','-','>','<','.',',','[',']'];
 const MAX_MEM: usize = 32768;
-// const MAX_MEM: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
 enum CMD {
@@ -22,21 +20,11 @@ enum CMD {
 }
 
 fn get_32bit_offset(jump_from: usize, jump_to: usize) -> u32 {
-    // dbg!(jump_from, jump_to);
     if jump_to >= jump_from {
         let diff = jump_to - jump_from;
-        // dbg!(diff);
-        // dbg!(diff as u32);
-        // assert!(diff < (1u64 << 31));
         return diff as u32;
     } else {
-        // Here the diff is negative, so we need to encode it as 2's complement.
         let diff = jump_from - jump_to;
-        // dbg!(diff);
-        // dbg!(diff as u32);
-        // println!("WRAP: {}", !(diff as u32).wrapping_sub(1) as i32);
-        // dbg!(!(diff as u32).wrapping_sub(1));
-        // assert!(diff - 1 < (1u64 << 31));
         let diff_unsigned = diff as u32;
         return !diff_unsigned.wrapping_sub(1);
     }
@@ -116,37 +104,34 @@ impl<'a> Buff {
                 },
                 CMD::JmpR => {
                     self.append(vec![0x41, 0x80, 0x7D, 0x00, 0x00]);
+                    // append the current position to stack
                     self.stack(self.len());
                     self.append(vec![0x0F, 0x84]);
+                    // append placeholder jump location
                     self.u32(0_u32);
                 },
                 CMD::JmpL => {
+                    // get the location of the most recent JmpR
                     match self.stack.pop() {
                         None => {
-                            eprintln!("Mismatched brackets @: {}", self.data.len());
+                            eprintln!("Mismatched brackets @: {}", self.len());
                             break
                         },
                         Some(open_offset) => {
-                            // println!("{:?}", open_offset);
                             self.append(vec![0x41, 0x80, 0x7D, 0x00, 0x00]);
-                            // get offset for jmp back
+                            // calc value to jump to
                             let jmp_bk_from = self.len() + 6;
                             let jmp_bk_to = open_offset + 6;
                             let rel_jmp_bk_offset = get_32bit_offset(jmp_bk_from, jmp_bk_to);
-                            // make jmp
+                            // append it
                             self.append(vec![0x0F, 0x85]);
                             self.u32(rel_jmp_bk_offset);
-                            // dbg!(rel_jmp_bk_offset as i32);
-                            // get offset for jmp forward
+                            // calculate value jump back from
                             let jmp_fw_from = open_offset + 6;
                             let jmp_fw_to = self.len();
                             let rel_jmp_fw_offset = get_32bit_offset(jmp_fw_from, jmp_fw_to);
-                            // dbg!(rel_jmp_fw_offset);
+                            // overwrite the placeholder value with it
                             self.replace_u32(rel_jmp_fw_offset, open_offset + 2);
-                            // dbg!(self.data[open_offset + 2]);
-                            // dbg!(self.data[open_offset + 3]);
-                            // dbg!(self.data[open_offset + 4]);
-                            // dbg!(self.data[open_offset + 5]);
                         },
                     }
                 },
@@ -240,6 +225,7 @@ fn parse(code: &mut Vec<char>) -> Vec<CMD> {
     map
 }
 
+#[allow(dead_code)]
 fn show_hex_32(bytes: &Vec<u8>) {
     let mut ct = 0;
     for byte in bytes {
@@ -254,6 +240,7 @@ fn show_hex_32(bytes: &Vec<u8>) {
     }
 }
 
+#[allow(dead_code)]
 fn show_hex_64(bytes: &Vec<u8>) {
     let mut ct = 0;
     for byte in bytes {
@@ -273,16 +260,17 @@ fn main() {
     let data: String = read_input_file();
 
     let mut code_txt: Vec<char> = data.chars()
-                              .collect();
-    // filter code_txt
+                                      .collect();
+    // filter out characters not present in COMMANDS
     code_txt.retain(|&c| COMMANDS.contains(&c));
 
     // parse into CST
     let parsed_code = parse(&mut code_txt);
 
-    // init runtime mem
+    // allocate runtime mem
     let mem: [u8; MAX_MEM] = [0; MAX_MEM];
 
+    // this struct will create and store our code from the CST
     let mut buffer = Buff {
         data: vec![], // where our code is stored
         stack: vec![], // used for tracking jmp offsets
@@ -293,23 +281,19 @@ fn main() {
     buffer.push(0xbd);
     buffer.u64(mem.as_ptr() as u64);
 
+    // encode the CST as machine code
     buffer.encode(parsed_code);
 
+    // calling convention to denote a return to caller
     buffer.push(0xc3);
-    // dbg!(mem.as_ptr());
-    // println!("buffer len: {:?}", buffer.len());
-    let len = buffer.len();
 
-    // dbg!(len / PAGE_SIZE + 1);
-    // let mut code = ExecutableMemory::new(
-    //     len / PAGE_SIZE + 1
-    // );
-    // code.as_slice_mut()[..buffer.len()].copy_from_slice(&buffer.data);
-    let code = ExecutableMemory::with_contents(&buffer.data);
+    // copy our program to executable memory
+    let program = ExecutableMemory::with_contents(&buffer.data);
 
     // println!("PROGRAM CODE: ");
     // show_hex_64(&buffer.data);
 
+    let len = buffer.len();
     let rows = (len-(len% 32)) / 32;
     let extra = len%32;
     println!("PROGRAM LEN: {}*64 + {}", rows, extra);
@@ -318,7 +302,7 @@ fn main() {
     println!("--- START ---");
     let mark1 = time.elapsed().as_micros();
     unsafe {
-        let f = transmute::<*mut u8, unsafe fn()>(code.as_ptr());
+        let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
         f();
     }
     let mark2 = time.elapsed().as_micros();
@@ -327,6 +311,5 @@ fn main() {
     let diff = mark2-mark1;
     println!("PROGRAM RUNTIME: {}s {}ms {}us", (diff/1000/1000), (diff/1000%1000), diff%1000);
     // println!("PROGRAM MEM: {:?}", mem);
-    // println!("{:?}", code);
 }
 

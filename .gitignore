@@ -1,1 +1,5 @@
 /target
+/bf
+*.bf
+!hello_world.bf
+!mandelbrot.bf

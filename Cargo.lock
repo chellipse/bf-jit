@@ -3,7 +3,7 @@
 version = 3
 
 [[package]]
-name = "bf-interpreter-rs"
+name = "bf-jit"
 version = "0.1.0"
 dependencies = [
  "vonneumann",
@@ -17,7 +17,9 @@ checksum = "13e3bf6590cbc649f4d1a3eefc9d5d6eb746f5200ffb04e5e142700b8faa56e7"
 
 [[package]]
 name = "vonneumann"
-version = "1.0.0"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cb29fbee2b4e10d3b2877316eddc8ed3a51daead67492d40f2714f48b14d10b"
 dependencies = [
  "libc",
  "winapi",
