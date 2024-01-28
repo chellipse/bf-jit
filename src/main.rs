@@ -6,16 +6,16 @@ use vonneumann::ExecutableMemory;
 
 const PAGE_SIZE: usize = 4096;
 const COMMANDS: [char; 8] = ['+','-','>','<','.',',','[',']'];
-// const MAX_MEM: usize = 32768;
-const MAX_MEM: usize = 32;
+const MAX_MEM: usize = 32768;
+// const MAX_MEM: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
 enum CMD {
-    Plus(usize),
-    Minus(usize),
-    PtrR(usize),
-    PtrL(usize),
-    Push(usize),
+    Plus(u8),
+    Minus(u8),
+    PtrR(u8),
+    PtrL(u8),
+    Push(u8),
     Pull,
     JmpR,
     JmpL,
@@ -78,54 +78,49 @@ impl<'a> Buff {
             }
         }
     }
-    fn encode(&mut self, cmds: Vec<char>) {
-        for char in cmds {
-            match char {
-                '+' => {
-                    let v = 1;
-                    self.append(vec![0x41, 0x80, 0x45, 0x00, v]);
+    fn encode(&mut self, cmds: Vec<CMD>) {
+        for cmd in cmds {
+            match cmd {
+                CMD::Plus(n) => {
+                    // increment the value r13 points at by n (8bit)
+                    self.append(vec![0x41, 0x80, 0x45, 0x00, n]);
                 },
-                '-' => {
-                    let v = 1;
-                    self.append(vec![0x41, 0x80, 0x6D, 0x00, v]);
+                CMD::Minus(n) => {
+                    // deincrement the value r13 points at by n (8bit)
+                    self.append(vec![0x41, 0x80, 0x6D, 0x00, n]);
                 },
-                '>' => {
-                    // INC r13
-                    // self.append(vec![0x49, 0xFF, 0xC5]);
-                    let v = 1;
-                    self.append(vec![0x49, 0x83, 0xC5, v]);
+                CMD::PtrR(n) => {
+                    // increment r13 by n (8bit)
+                    self.append(vec![0x49, 0x83, 0xC5, n]);
                 },
-                '<' => {
-                    // DEC r13
-                    // self.append(vec![0x49, 0xFF, 0xCD]);
-                    let v = 1;
-                    self.append(vec![0x49, 0x83, 0xED, v]);
-                    // self.append(vec![0x49, 0x80, 0xCD, 0x01]);
+                CMD::PtrL(n) => {
+                    // increment r13 by n (8bit)
+                    self.append(vec![0x49, 0x83, 0xED, n]);
                 },
-                '.' => {
-                    let n = 1;
+                CMD::Push(n) => {
                     self.append(vec![0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]);
                     self.append(vec![0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00]);
                     self.append(vec![0x4C, 0x89, 0xEE]);
                     self.append(vec![0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00]);
+                    // once registers are setup, we can repeat our systemcall if desired
                     for _ in 0..n {
                         self.append(vec![0x0F, 0x05]);
                     }
                 },
-                ',' => {
+                CMD::Pull => {
                     self.append(vec![0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00]);
                     self.append(vec![0x48, 0xC7, 0xC7, 0x00, 0x00, 0x00, 0x00]);
                     self.append(vec![0x4C, 0x89, 0xEE]);
                     self.append(vec![0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00]);
                     self.append(vec![0x0F, 0x05]);
                 },
-                '[' => {
+                CMD::JmpR => {
                     self.append(vec![0x41, 0x80, 0x7D, 0x00, 0x00]);
                     self.stack(self.len());
                     self.append(vec![0x0F, 0x84]);
                     self.u32(0_u32);
                 },
-                ']' => {
+                CMD::JmpL => {
                     match self.stack.pop() {
                         None => {
                             eprintln!("Mismatched brackets @: {}", self.data.len());
@@ -154,8 +149,6 @@ impl<'a> Buff {
                             // dbg!(self.data[open_offset + 5]);
                         },
                     }
-                },
-                _ => {
                 },
             }
         }
@@ -300,14 +293,14 @@ fn main() {
     buffer.push(0xbd);
     buffer.u64(mem.as_ptr() as u64);
 
-    buffer.encode(code_txt);
+    buffer.encode(parsed_code);
 
     buffer.push(0xc3);
     // dbg!(mem.as_ptr());
     // println!("buffer len: {:?}", buffer.len());
     let len = buffer.len();
 
-    dbg!(len / PAGE_SIZE + 1);
+    // dbg!(len / PAGE_SIZE + 1);
     // let mut code = ExecutableMemory::new(
     //     len / PAGE_SIZE + 1
     // );
@@ -317,7 +310,7 @@ fn main() {
     // println!("PROGRAM CODE: ");
     // show_hex_64(&buffer.data);
 
-    let rows = (828-(828 % 32)) / 32;
+    let rows = (len-(len% 32)) / 32;
     let extra = len%32;
     println!("PROGRAM LEN: {}*64 + {}", rows, extra);
 
@@ -333,7 +326,7 @@ fn main() {
 
     let diff = mark2-mark1;
     println!("PROGRAM RUNTIME: {}s {}ms {}us", (diff/1000/1000), (diff/1000%1000), diff%1000);
-    println!("PROGRAM MEM: {:?}", mem);
+    // println!("PROGRAM MEM: {:?}", mem);
     // println!("{:?}", code);
 }
 
