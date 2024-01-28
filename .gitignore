@@ -1,5 +1,4 @@
 /target
-/bf
-*.bf
-!hello_world.bf
-!mandelbrot.bf
+/bf_programs/*
+!/bf_programs/hello_world.bf
+!/bf_programs/mandelbrot.bf
