@@ -6,19 +6,20 @@ use vonneumann::ExecutableMemory;
 
 const PAGE_SIZE: usize = 4096;
 const COMMANDS: [char; 8] = ['+','-','>','<','.',',','[',']'];
-const MAX_MEM: usize = 2048;
+// const MAX_MEM: usize = 32768;
+const MAX_MEM: usize = 32;
 
-// #[derive(Debug, Clone, Copy)]
-// enum CMD {
-//     Plus(usize),
-//     Minus(usize),
-//     PtrR(usize),
-//     PtrL(usize),
-//     Push(usize),
-//     Pull(usize),
-//     JmpR(usize),
-//     JmpL(usize),
-// }
+#[derive(Debug, Clone, Copy)]
+enum CMD {
+    Plus(usize),
+    Minus(usize),
+    PtrR(usize),
+    PtrL(usize),
+    Push(usize),
+    Pull,
+    JmpR,
+    JmpL,
+}
 
 fn get_32bit_offset(jump_from: usize, jump_to: usize) -> u32 {
     // dbg!(jump_from, jump_to);
@@ -81,23 +82,35 @@ impl<'a> Buff {
         for char in cmds {
             match char {
                 '+' => {
-                    self.append(vec![0x41, 0x80, 0x45, 0x00, 0x01]);
+                    let v = 1;
+                    self.append(vec![0x41, 0x80, 0x45, 0x00, v]);
                 },
                 '-' => {
-                    self.append(vec![0x41, 0x80, 0x6D, 0x00, 0x01]);
+                    let v = 1;
+                    self.append(vec![0x41, 0x80, 0x6D, 0x00, v]);
                 },
                 '>' => {
-                    self.append(vec![0x49, 0xFF, 0xC5]);
+                    // INC r13
+                    // self.append(vec![0x49, 0xFF, 0xC5]);
+                    let v = 1;
+                    self.append(vec![0x49, 0x83, 0xC5, v]);
                 },
                 '<' => {
-                    self.append(vec![0x49, 0xFF, 0xCD]);
+                    // DEC r13
+                    // self.append(vec![0x49, 0xFF, 0xCD]);
+                    let v = 1;
+                    self.append(vec![0x49, 0x83, 0xED, v]);
+                    // self.append(vec![0x49, 0x80, 0xCD, 0x01]);
                 },
                 '.' => {
+                    let n = 1;
                     self.append(vec![0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]);
                     self.append(vec![0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00]);
                     self.append(vec![0x4C, 0x89, 0xEE]);
                     self.append(vec![0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00]);
-                    self.append(vec![0x0F, 0x05]);
+                    for _ in 0..n {
+                        self.append(vec![0x0F, 0x05]);
+                    }
                 },
                 ',' => {
                     self.append(vec![0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00]);
@@ -168,75 +181,71 @@ fn read_input_file() -> String {
     }
 }
 
-// fn parse(code: &mut Vec<char>) -> Vec<CMD> {
-//     let mut map: Vec<CMD> = vec![];
-//     code.push(' ');
-//     let mut i = 0;
-//     while i < code.len() {
-//         match code[i] {
-//             '+' => {
-//                 let mut l = 0;
-//                 while code[i] == '+' {
-//                     i += 1;
-//                     l += 1;
-//                 }
-//                 map.push(CMD::Plus(l));
-//             },
-//             '-' => {
-//                 let mut l = 0;
-//                 while code[i] == '-' {
-//                     i += 1;
-//                     l += 1;
-//                 }
-//                 map.push(CMD::Minus(l));
-//             },
-//             '>' => {
-//                 let mut l = 0;
-//                 while code[i] == '>' {
-//                     i += 1;
-//                     l += 1;
-//                 }
-//                 map.push(CMD::PtrR(l));
-//             },
-//             '<' => {
-//                 let mut l = 0;
-//                 while code[i] == '<' {
-//                     i += 1;
-//                     l += 1;
-//                 }
-//                 map.push(CMD::PtrL(l));
-//             },
-//             '.' => {
-//                 let mut l = 0;
-//                 while code[i] == '.' {
-//                     i += 1;
-//                     l += 1;
-//                 }
-//                 map.push(CMD::Push(l));
-//             },
-//             ',' => {
-//                 let mut l = 0;
-//                 while code[i] == ',' {
-//                     i += 1;
-//                     l += 1;
-//                 }
-//                 map.push(CMD::Pull(l));
-//             },
-//             '[' => {
-//                 map.push(CMD::JmpR(0));
-//                 i += 1;
-//             },
-//             ']' => {
-//                 map.push(CMD::JmpL(0));
-//                 i += 1;
-//             },
-//             _ => {
-//                 i += 1;
-//             },
-//         }
-//     }
-//     map
-// }
+fn parse(code: &mut Vec<char>) -> Vec<CMD> {
+    let mut map: Vec<CMD> = vec![];
+    code.push(' ');
+    let mut i = 0;
+    while i < code.len() {
+        match code[i] {
+            '+' => {
+                let mut l = 0;
+                while code[i] == '+' {
+                    i += 1;
+                    l += 1;
+                }
+                map.push(CMD::Plus(l));
+            },
+            '-' => {
+                let mut l = 0;
+                while code[i] == '-' {
+                    i += 1;
+                    l += 1;
+                }
+                map.push(CMD::Minus(l));
+            },
+            '>' => {
+                let mut l = 0;
+                while code[i] == '>' {
+                    i += 1;
+                    l += 1;
+                }
+                map.push(CMD::PtrR(l));
+            },
+            '<' => {
+                let mut l = 0;
+                while code[i] == '<' {
+                    i += 1;
+                    l += 1;
+                }
+                map.push(CMD::PtrL(l));
+            },
+            '.' => {
+                let mut l = 0;
+                while code[i] == '.' {
+                    i += 1;
+                    l += 1;
+                }
+                map.push(CMD::Push(l));
+            },
+            ',' => {
+                map.push(CMD::Pull);
+                i += 1;
+            },
+            '[' => {
+                map.push(CMD::JmpR);
+                i += 1;
+            },
+            ']' => {
+                map.push(CMD::JmpL);
+                i += 1;
+            },
+            _ => {
+                i += 1;
+            },
+        }
+    }
+    map
+}
 
 fn show_hex_32(bytes: &Vec<u8>) {
     let mut ct = 0;
@@ -276,10 +285,7 @@ fn main() {
     code_txt.retain(|&c| COMMANDS.contains(&c));
 
     // parse into CST
-    // let parsed_code = parse(&mut code_txt);
-
-    // add Jmp values to CST
-    // let code: Vec<CMD> = add_jmp_values(parsed_code);
+    let parsed_code = parse(&mut code_txt);
 
     // init runtime mem
     let mem: [u8; MAX_MEM] = [0; MAX_MEM];
@@ -289,6 +295,7 @@ fn main() {
         stack: vec![], // used for tracking jmp offsets
     };
 
+    // mov [program mem ptr] to r13
     buffer.push(0x49);
     buffer.push(0xbd);
     buffer.u64(mem.as_ptr() as u64);
@@ -326,7 +333,7 @@ fn main() {
 
     let diff = mark2-mark1;
     println!("PROGRAM RUNTIME: {}s {}ms {}us", (diff/1000/1000), (diff/1000%1000), diff%1000);
-    // println!("PROGRAM MEM: {:?}", mem);
+    println!("PROGRAM MEM: {:?}", mem);
     // println!("{:?}", code);
 }
 
