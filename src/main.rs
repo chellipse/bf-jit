@@ -5,7 +5,7 @@ use std::mem::transmute;
 use vonneumann::ExecutableMemory;
 
 const COMMANDS: [char; 8] = ['+','-','>','<','.',',','[',']'];
-const MAX_MEM: usize = 65535;
+const MAX_MEM: usize = 32767;
 
 #[derive(Debug, Clone, Copy)]
 enum CMD {
@@ -139,7 +139,7 @@ impl<'a> Buff {
                             let jmp_bk_to = open_offset + 6;
 
                             let diff = self.len() - open_offset;
-                            println!("{}", diff);
+                            // println!("{}", diff);
                             if diff < 256 {
                                 less_than += 1;
                             } else {
@@ -335,16 +335,22 @@ fn main() {
 
     let time = std::time::Instant::now();
     println!("--- START ---");
+
     let mark1 = time.elapsed().as_micros();
+    dbg!(mark1);
     unsafe {
         let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
-        // f();
+        f();
     }
     let mark2 = time.elapsed().as_micros();
     println!("\n--- END ---");
 
+
     let diff = mark2-mark1;
-    println!("PROGRAM RUNTIME: {}s {}ms {}us", (diff/1000/1000), (diff/1000%1000), diff%1000);
+    dbg!(diff);
+    dbg!(mark1);
+    dbg!(mark2);
+    // println!("PROGRAM RUNTIME: {}s {}ms {}us", (diff/1000/1000), (diff/1000%1000), diff%1000);
     // println!("PROGRAM MEM: {:?}", mem);
 }
 
