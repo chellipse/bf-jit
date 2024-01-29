@@ -61,6 +61,13 @@ impl<'a> Buff {
         let bytes = value.to_le_bytes();
         self.data.extend_from_slice(&bytes);
     }
+    fn replace_u64(&mut self, value: u64, mut index: usize) {
+        // index -= 1;
+        let bytes = value.to_le_bytes();
+        for (i, byte) in bytes.iter().enumerate() {
+            self.data[index + i] = *byte;
+        }
+    }
     fn replace_u32(&mut self, value: u32, index: usize) {
         let bytes = value.to_le_bytes();
         for (i, &byte) in bytes.iter().enumerate() {
@@ -161,7 +168,7 @@ impl<'a> Buff {
                 },
             }
         }
-        println!("LESS: {less_than}, MORE: {more_than}");
+        // println!("LESS: {less_than}, MORE: {more_than}");
     }
 }
 
@@ -301,9 +308,6 @@ fn main() {
     // parse into CST
     let parsed_code = parse(&mut code_txt);
 
-    // allocate runtime mem
-    let mem: [u8; MAX_MEM] = [0; MAX_MEM];
-
     // this struct will create and store our code from the CST
     let mut buffer = Buff {
         data: vec![], // where our code is stored
@@ -314,7 +318,8 @@ fn main() {
     // mov [program mem ptr] to r13
     buffer.push(0x49);
     buffer.push(0xbd);
-    buffer.u64(mem.as_ptr() as u64);
+    // buffer.u64(mem.as_ptr() as u64);
+    buffer.u64(0_u64); // placeholder for mem ptr
 
     // encode the CST as machine code
     buffer.encode(parsed_code);
@@ -322,8 +327,8 @@ fn main() {
     // calling convention to denote a return to caller
     buffer.push(0xc3);
 
-    // copy our program to executable memory
-    let program = ExecutableMemory::with_contents(&buffer.data);
+    // dbg!(buffer.data[0]);
+
 
     // println!("PROGRAM CODE: ");
     // show_hex_64(&buffer.data);
@@ -333,23 +338,31 @@ fn main() {
     let extra = len%32;
     println!("PROGRAM LEN: {}*64 + {}", rows, extra);
 
-    let time = std::time::Instant::now();
-    println!("--- START ---");
-
-    let mark1 = time.elapsed().as_micros();
-    dbg!(mark1);
-    unsafe {
-        let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
-        f();
+    // let time = std::time::Instant::now();
+    // println!("--- START ---");
+    // let mark1 = time.elapsed().as_micros();
+    // dbg!(mark1);
+    {
+        // allocate runtime mem
+        let mem: [u8; MAX_MEM] = [0; MAX_MEM];
+        // overwrite placeholder pointer with mem ptr
+        buffer.replace_u64(mem.as_ptr() as u64, 2);
+        // copy our program to executable memory
+        let program = ExecutableMemory::with_contents(&buffer.data);
+        unsafe {
+            let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
+            let _blocker: [u128; 32] = [0; 32];
+            f();
+        }
     }
-    let mark2 = time.elapsed().as_micros();
-    println!("\n--- END ---");
+    // let mark2 = time.elapsed().as_micros();
+    // println!("\n--- END ---");
 
 
-    let diff = mark2-mark1;
-    dbg!(diff);
-    dbg!(mark1);
-    dbg!(mark2);
+    // let diff = mark2-mark1;
+    // dbg!(diff);
+    // dbg!(mark1);
+    // dbg!(mark2);
     // println!("PROGRAM RUNTIME: {}s {}ms {}us", (diff/1000/1000), (diff/1000%1000), diff%1000);
     // println!("PROGRAM MEM: {:?}", mem);
 }
