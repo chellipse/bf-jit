@@ -2,7 +2,7 @@
 # bf-jit
 
 A just-in-time compiler for the Brainfuck programming language.
-Compiles directly to x86-64 machine code (no assembly).
+Compiles directly to x86-64 machine code.
 
 ## System requirements
 
