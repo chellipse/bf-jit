@@ -5,15 +5,15 @@ use std::mem::transmute;
 use vonneumann::ExecutableMemory;
 
 const COMMANDS: [char; 8] = ['+','-','>','<','.',',','[',']'];
-const MAX_MEM: usize = 32768;
+const MAX_MEM: usize = 65535;
 
 #[derive(Debug, Clone, Copy)]
 enum CMD {
     Plus(u8),
     Minus(u8),
-    PtrR(u8),
-    PtrL(u8),
-    Push(u8),
+    PtrR(u32),
+    PtrL(u32),
+    Push(u16),
     Pull,
     JmpR,
     JmpL,
@@ -22,19 +22,22 @@ enum CMD {
 fn get_32bit_offset(jump_from: usize, jump_to: usize) -> u32 {
     if jump_to >= jump_from {
         let diff = jump_to - jump_from;
+        // println!("1: {}", diff as i64);
         return diff as u32;
     } else {
         let diff = jump_from - jump_to;
         let diff_unsigned = diff as u32;
+        // println!("2: {}", diff_unsigned as i64);
         return !diff_unsigned.wrapping_sub(1);
     }
 }
 
 struct Buff {
     data: Vec<u8>,
-    stack: Vec<usize>,
+    jmp_stack: Vec<usize>,
 }
 
+#[allow(dead_code)]
 impl<'a> Buff {
     fn push(&mut self, v: u8) {
         self.data.push(v);
@@ -45,7 +48,7 @@ impl<'a> Buff {
         }
     }
     fn stack(&mut self, v: usize) {
-        self.stack.push(v);
+        self.jmp_stack.push(v);
     }
     fn len(&self) -> usize {
         self.data.len()
@@ -58,6 +61,13 @@ impl<'a> Buff {
         let bytes = value.to_le_bytes();
         self.data.extend_from_slice(&bytes);
     }
+    fn replace_u64(&mut self, value: u64, index: usize) {
+        // index -= 1;
+        let bytes = value.to_le_bytes();
+        for (i, byte) in bytes.iter().enumerate() {
+            self.data[index + i] = *byte;
+        }
+    }
     fn replace_u32(&mut self, value: u32, index: usize) {
         let bytes = value.to_le_bytes();
         for (i, &byte) in bytes.iter().enumerate() {
@@ -66,7 +76,11 @@ impl<'a> Buff {
             }
         }
     }
-    fn encode(&mut self, cmds: Vec<CMD>) {
+    fn encode(&mut self, cmds: Vec<CMD>, pointer: u64) {
+        // mov [program mem ptr] to r13
+        self.push(0x49);
+        self.push(0xbd);
+        self.u64(pointer); // pointer to program memory
         for cmd in cmds {
             match cmd {
                 CMD::Plus(n) => {
@@ -79,11 +93,21 @@ impl<'a> Buff {
                 },
                 CMD::PtrR(n) => {
                     // increment r13 by n (8bit)
-                    self.append(vec![0x49, 0x83, 0xC5, n]);
+                    if n <= 255 {
+                        self.append(vec![0x49, 0x83, 0xC5, n as u8]);
+                    } else {
+                        let bytes = n.to_le_bytes();
+                        self.append(vec![0x49, 0x81, 0xC5, bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    }
                 },
                 CMD::PtrL(n) => {
                     // increment r13 by n (8bit)
-                    self.append(vec![0x49, 0x83, 0xED, n]);
+                    if n <= 255 {
+                        self.append(vec![0x49, 0x83, 0xED, n as u8]);
+                    } else {
+                        let bytes = n.to_le_bytes();
+                        self.append(vec![0x49, 0x81, 0xED, bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    }
                 },
                 CMD::Push(n) => {
                     self.append(vec![0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]);
@@ -112,7 +136,7 @@ impl<'a> Buff {
                 },
                 CMD::JmpL => {
                     // get the location of the most recent JmpR
-                    match self.stack.pop() {
+                    match self.jmp_stack.pop() {
                         None => {
                             eprintln!("Mismatched brackets @: {}", self.len());
                             break
@@ -137,6 +161,8 @@ impl<'a> Buff {
                 },
             }
         }
+        // return to caller
+        self.push(0xc3);
     }
 }
 
@@ -161,7 +187,7 @@ fn read_input_file() -> String {
 
 fn parse(code: &mut Vec<char>) -> Vec<CMD> {
     let mut map: Vec<CMD> = vec![];
-    code.push(' ');
+    code.push(' '); // prevents out of bounds err
     let mut i = 0;
     while i < code.len() {
         match code[i] {
@@ -255,61 +281,45 @@ fn show_hex_64(bytes: &Vec<u8>) {
     }
 }
 
-fn main() {
-    // read first arg as file to string
-    let data: String = read_input_file();
-
-    let mut code_txt: Vec<char> = data.chars()
-                                      .collect();
-    // filter out characters not present in COMMANDS
-    code_txt.retain(|&c| COMMANDS.contains(&c));
-
-    // parse into CST
-    let parsed_code = parse(&mut code_txt);
-
-    // allocate runtime mem
-    let mem: [u8; MAX_MEM] = [0; MAX_MEM];
-
+// build & run CST
+fn run(code: Vec<CMD>) {
     // this struct will create and store our code from the CST
     let mut buffer = Buff {
         data: vec![], // where our code is stored
-        stack: vec![], // used for tracking jmp offsets
+        jmp_stack: vec![], // used for tracking jmp offsets
     };
 
-    // mov [program mem ptr] to r13
-    buffer.push(0x49);
-    buffer.push(0xbd);
-    buffer.u64(mem.as_ptr() as u64);
-
-    // encode the CST as machine code
-    buffer.encode(parsed_code);
-
-    // calling convention to denote a return to caller
-    buffer.push(0xc3);
-
-    // copy our program to executable memory
-    let program = ExecutableMemory::with_contents(&buffer.data);
-
-    // println!("PROGRAM CODE: ");
-    // show_hex_64(&buffer.data);
-
-    let len = buffer.len();
-    let rows = (len-(len% 32)) / 32;
-    let extra = len%32;
-    println!("PROGRAM LEN: {}*64 + {}", rows, extra);
-
-    let time = std::time::Instant::now();
-    println!("--- START ---");
-    let mark1 = time.elapsed().as_micros();
-    unsafe {
-        let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
-        f();
+    {
+        // allocate runtime mem
+        let mem: [u8; MAX_MEM] = [0; MAX_MEM];
+        let pointer: u64 = mem.as_ptr().wrapping_add(MAX_MEM/2) as u64;
+        buffer.encode(code, pointer);
+        // show_hex_32(&buffer.data);
+        // copy our program to executable memory
+        let program = ExecutableMemory::with_contents(&buffer.data);
+        unsafe {
+            let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
+            f();
+        }
     }
-    let mark2 = time.elapsed().as_micros();
-    println!("\n--- END ---");
+}
 
-    let diff = mark2-mark1;
-    println!("PROGRAM RUNTIME: {}s {}ms {}us", (diff/1000/1000), (diff/1000%1000), diff%1000);
-    // println!("PROGRAM MEM: {:?}", mem);
+fn main() {
+    // if env::args().count() > 1 {
+    //     todo!()
+    // }
+    // read first arg as file to string
+    let txt: String = read_input_file();
+
+    let mut chars: Vec<char> = txt.chars()
+                                      .collect();
+    // filter out characters not present in COMMANDS
+    chars.retain(|&c| COMMANDS.contains(&c));
+
+    // parse into CST
+    let cst = parse(&mut chars);
+
+    // build & run CST
+    run(cst);
 }
 
