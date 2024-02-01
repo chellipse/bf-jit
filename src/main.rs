@@ -80,7 +80,7 @@ impl<'a> Buff {
         // mov [program mem ptr] to r13
         self.push(0x49);
         self.push(0xbd);
-        self.u64(pointer); // placeholder for mem ptr
+        self.u64(pointer); // pointer to program memory
         for cmd in cmds {
             match cmd {
                 CMD::Plus(n) => {
@@ -187,8 +187,7 @@ fn read_input_file() -> String {
 
 fn parse(code: &mut Vec<char>) -> Vec<CMD> {
     let mut map: Vec<CMD> = vec![];
-    code.push(' ');
-    let mut jmp_stack: Vec<usize> = Vec::new();
+    code.push(' '); // prevents out of bounds err
     let mut i = 0;
     while i < code.len() {
         match code[i] {
@@ -238,7 +237,6 @@ fn parse(code: &mut Vec<char>) -> Vec<CMD> {
             },
             '[' => {
                 map.push(CMD::JmpR);
-                jmp_stack.push(i);
                 i += 1;
             },
             ']' => {
@@ -283,6 +281,7 @@ fn show_hex_64(bytes: &Vec<u8>) {
     }
 }
 
+// build & run CST
 fn run(code: Vec<CMD>) {
     // this struct will create and store our code from the CST
     let mut buffer = Buff {
@@ -306,17 +305,21 @@ fn run(code: Vec<CMD>) {
 }
 
 fn main() {
+    // if env::args().count() > 1 {
+    //     todo!()
+    // }
     // read first arg as file to string
-    let data: String = read_input_file();
+    let txt: String = read_input_file();
 
-    let mut code_txt: Vec<char> = data.chars()
+    let mut chars: Vec<char> = txt.chars()
                                       .collect();
     // filter out characters not present in COMMANDS
-    code_txt.retain(|&c| COMMANDS.contains(&c));
+    chars.retain(|&c| COMMANDS.contains(&c));
 
     // parse into CST
-    let parsed_code = parse(&mut code_txt);
+    let cst = parse(&mut chars);
 
-    run(parsed_code);
+    // build & run CST
+    run(cst);
 }
 
