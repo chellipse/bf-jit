@@ -35,7 +35,6 @@ fn get_32bit_offset(jump_from: usize, jump_to: usize) -> u32 {
 struct Buff {
     data: Vec<u8>,
     jmp_stack: Vec<usize>,
-    ptr: i32,
 }
 
 impl<'a> Buff {
@@ -61,8 +60,7 @@ impl<'a> Buff {
         let bytes = value.to_le_bytes();
         self.data.extend_from_slice(&bytes);
     }
-    fn replace_u64(&mut self, value: u64, mut index: usize) {
-        // index -= 1;
+    fn _replace_u64(&mut self, value: u64, index: usize) {
         let bytes = value.to_le_bytes();
         for (i, byte) in bytes.iter().enumerate() {
             self.data[index + i] = *byte;
@@ -76,14 +74,28 @@ impl<'a> Buff {
             }
         }
     }
-    fn encode(&mut self, cmds: Vec<CMD>) {
-        let mut less_than = 0;
-        let mut more_than = 0;
+    fn encode(&mut self, cmds: Vec<CMD>, mem_ptr: *const u8) {
+        // movabs r13 (used for program)
+        self.append(vec![0x49, 0xbd]);
+        self.u64(mem_ptr as u64);
+        // movabs r14 (tracks maximum)
+        // self.append(vec![0x49, 0xbe]);
+        // self.u64(mem_ptr + MAX_MEM as u64);
+        // movabs r15 (tracks minimum)
+        // self.append(vec![0x49, 0xbf]);
+        // self.u64(mem_ptr);
+
         for cmd in cmds {
+            println!(":{:?}", cmd);
             match cmd {
                 CMD::Plus(n) => {
+// self.append(vec![0x4D, 0x39, 0xF5, 0x7E, 0x07, 0x4D, 0x89, 0xF5, 0xE9, 0x0C, 0x00, 0x00, 0x00]);
+// self.append(vec![0x4D, 0x39, 0xFD, 0x7D, 0x07, 0x4D, 0x89, 0xFD, 0xEB, 0x05]);
                     // increment the value r13 points at by n (8bit)
                     self.append(vec![0x41, 0x80, 0x45, 0x00, n]);
+
+                    // 4D 39 F5 7E 02 4D 89 F5
+                    // 4D 39 FD 7D 02 4D 89 FD
                 },
                 CMD::Minus(n) => {
                     // deincrement the value r13 points at by n (8bit)
@@ -124,15 +136,15 @@ impl<'a> Buff {
                     self.append(vec![0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00]);
                     self.append(vec![0x0F, 0x05]);
                 },
-                CMD::JmpR(n) => {
+                CMD::JmpR(_) => {
                     self.append(vec![0x41, 0x80, 0x7D, 0x00, 0x00]);
                     // append the current position to stack
                     self.stack(self.len());
-                    self.append(vec![0x0F, 0x84]);
+
                     // append placeholder jump location
                     self.u32(0_u32);
                 },
-                CMD::JmpL(n) => {
+                CMD::JmpL(_) => {
                     // get the location of the most recent JmpR
                     match self.jmp_stack.pop() {
                         None => {
@@ -144,15 +156,6 @@ impl<'a> Buff {
                             // calc value to jump to
                             let jmp_bk_from = self.len() + 6;
                             let jmp_bk_to = open_offset + 6;
-
-                            let diff = self.len() - open_offset;
-                            // println!("{}", diff);
-                            if diff < 256 {
-                                less_than += 1;
-                            } else {
-                                more_than += 1;
-                            }
-
                             let rel_jmp_bk_offset = get_32bit_offset(jmp_bk_from, jmp_bk_to);
                             // append it
                             self.append(vec![0x0F, 0x85]);
@@ -167,8 +170,12 @@ impl<'a> Buff {
                     }
                 },
             }
+            show_hex_32(&self.data);
+            println!("-");
         }
-        // println!("LESS: {less_than}, MORE: {more_than}");
+        // append return value
+        // for calling convertion
+        self.push(0xc3);
     }
 }
 
@@ -305,6 +312,8 @@ fn main() {
     // filter out characters not present in COMMANDS
     code_txt.retain(|&c| COMMANDS.contains(&c));
 
+    println!("TXT: {}", data);
+
     // parse into CST
     let parsed_code = parse(&mut code_txt);
 
@@ -312,58 +321,21 @@ fn main() {
     let mut buffer = Buff {
         data: vec![], // where our code is stored
         jmp_stack: vec![], // used for tracking jmp offsets
-        ptr: 0,
     };
 
-    // mov [program mem ptr] to r13
-    buffer.push(0x49);
-    buffer.push(0xbd);
-    // buffer.u64(mem.as_ptr() as u64);
-    buffer.u64(0_u64); // placeholder for mem ptr
-
-    // encode the CST as machine code
-    buffer.encode(parsed_code);
-
-    // calling convention to denote a return to caller
-    buffer.push(0xc3);
-
-    // dbg!(buffer.data[0]);
-
-
-    // println!("PROGRAM CODE: ");
-    // show_hex_64(&buffer.data);
-
-    let len = buffer.len();
-    let rows = (len-(len% 32)) / 32;
-    let extra = len%32;
-    println!("PROGRAM LEN: {}*64 + {}", rows, extra);
-
-    // let time = std::time::Instant::now();
-    // println!("--- START ---");
-    // let mark1 = time.elapsed().as_micros();
-    // dbg!(mark1);
     {
         // allocate runtime mem
         let mem: [u8; MAX_MEM] = [0; MAX_MEM];
-        // overwrite placeholder pointer with mem ptr
-        buffer.replace_u64(mem.as_ptr() as u64, 2);
-        // copy our program to executable memory
+        // encode our program alongside data for given memory region
+        buffer.encode(parsed_code, mem.as_ptr());
+        show_hex_32(&buffer.data);
         let program = ExecutableMemory::with_contents(&buffer.data);
         unsafe {
             let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
-            let _blocker: [u128; 32] = [0; 32];
+            // let _blocker: [u128; 32] = [0; 32];
             f();
         }
+        println!("Done");
     }
-    // let mark2 = time.elapsed().as_micros();
-    // println!("\n--- END ---");
-
-
-    // let diff = mark2-mark1;
-    // dbg!(diff);
-    // dbg!(mark1);
-    // dbg!(mark2);
-    // println!("PROGRAM RUNTIME: {}s {}ms {}us", (diff/1000/1000), (diff/1000%1000), diff%1000);
-    // println!("PROGRAM MEM: {:?}", mem);
 }
 
