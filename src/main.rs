@@ -308,6 +308,26 @@ fn main() {
     // if env::args().count() > 1 {
     //     todo!()
     // }
+    use std::io::Write;
+    loop {
+        println!("");
+        print!(">>> ");
+        std::io::stdout().flush().expect("Err");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).unwrap();
+        match input.as_str() {
+            "EXIT\n" => {
+                dbg!(input.as_str());
+                break
+            }
+            _ => {
+                let mut chars: Vec<char> = input.chars().collect();
+                chars.retain(|&c| COMMANDS.contains(&c));
+                let cst = parse(&mut chars);
+                run(cst);
+            }
+        }
+    }
     // read first arg as file to string
     let txt: String = read_input_file();
 
