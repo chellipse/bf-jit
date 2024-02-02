@@ -1,11 +1,12 @@
 use std::env;
 use std::fs::read_to_string;
-use std::process::exit;
 use std::mem::transmute;
 use vonneumann::ExecutableMemory;
+use std::io::Write;
 
 const COMMANDS: [char; 8] = ['+','-','>','<','.',',','[',']'];
 const MAX_MEM: usize = 65535;
+const OFFSET: usize = MAX_MEM/2;
 
 #[derive(Debug, Clone, Copy)]
 enum CMD {
@@ -162,38 +163,42 @@ impl<'a> Buff {
             }
         }
         // return to caller
+        // 4c 89 e8
+        self.append(vec![0x4c, 0x89, 0xe8]);
         self.push(0xc3);
     }
 }
 
 // attempts to read the first arg as file to string
 // will Panic! if the file doesn't exist or cannot be read
-fn read_input_file() -> String {
-    let args: Vec<String> = env::args().collect(); // get command line arguments
+fn read_input_file(arg: String) -> String {
+    // let args: Vec<String> = env::args().collect(); // get command line arguments
 
-    if args.len() != 2 {
-        println!("Incorrect number of args.");
-        eprintln!("Usage: {} <filename>", args[0]);
-        exit(1)
-    }
+    // if args.len() != 2 {
+    //     println!("Incorrect number of args.");
+    //     eprintln!("Usage: {} <filename>", args[0]);
+    //     exit(1)
+    // }
 
-    let filepath = &args[1]; // the last argument is the file name
+    // let filepath = &args[1]; // the last argument is the file name
 
-    match read_to_string(filepath) {
+    match read_to_string(arg) {
         Ok(content) => content,
         Err(e) => panic!("Failed to read file, err: {}", e),
     }
 }
 
-fn parse(code: &mut Vec<char>) -> Vec<CMD> {
+fn parse(input: String) -> Vec<CMD> {
+    let mut chars: Vec<char> = input.chars().collect();
+    chars.retain(|&c| COMMANDS.contains(&c));
     let mut map: Vec<CMD> = vec![];
-    code.push(' '); // prevents out of bounds err
+    chars.push(' '); // prevents out of bounds err
     let mut i = 0;
-    while i < code.len() {
-        match code[i] {
+    while i < chars.len() {
+        match chars[i] {
             '+' => {
                 let mut l = 0;
-                while code[i] == '+' {
+                while chars[i] == '+' {
                     i += 1;
                     l += 1;
                 }
@@ -201,7 +206,7 @@ fn parse(code: &mut Vec<char>) -> Vec<CMD> {
             },
             '-' => {
                 let mut l = 0;
-                while code[i] == '-' {
+                while chars[i] == '-' {
                     i += 1;
                     l += 1;
                 }
@@ -209,7 +214,7 @@ fn parse(code: &mut Vec<char>) -> Vec<CMD> {
             },
             '>' => {
                 let mut l = 0;
-                while code[i] == '>' {
+                while chars[i] == '>' {
                     i += 1;
                     l += 1;
                 }
@@ -217,7 +222,7 @@ fn parse(code: &mut Vec<char>) -> Vec<CMD> {
             },
             '<' => {
                 let mut l = 0;
-                while code[i] == '<' {
+                while chars[i] == '<' {
                     i += 1;
                     l += 1;
                 }
@@ -225,7 +230,7 @@ fn parse(code: &mut Vec<char>) -> Vec<CMD> {
             },
             '.' => {
                 let mut l = 0;
-                while code[i] == '.' {
+                while chars[i] == '.' {
                     i += 1;
                     l += 1;
                 }
@@ -304,42 +309,81 @@ fn run(code: Vec<CMD>) {
     }
 }
 
-fn main() {
-    // if env::args().count() > 1 {
-    //     todo!()
+// build & run CST with external ptr
+fn run_with_ptr(code: Vec<CMD>, pointer: u64) -> ExecutableMemory {
+    // this struct will create and store our code from the CST
+    let mut buffer = Buff {
+        data: vec![], // where our code is stored
+        jmp_stack: vec![], // used for tracking jmp offsets
+    };
+
+    buffer.encode(code, pointer);
+    // show_hex_32(&buffer.data);
+    // copy our program to executable memory
+    let program = ExecutableMemory::with_contents(&buffer.data);
+    return program
+    // unsafe {
+    //     let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
+    //     f();
     // }
-    use std::io::Write;
-    loop {
-        println!("");
-        print!(">>> ");
-        std::io::stdout().flush().expect("Err");
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-        match input.as_str() {
-            "EXIT\n" => {
-                dbg!(input.as_str());
-                break
-            }
-            _ => {
-                let mut chars: Vec<char> = input.chars().collect();
-                chars.retain(|&c| COMMANDS.contains(&c));
-                let cst = parse(&mut chars);
-                run(cst);
+}
+
+fn main() {
+    if env::args().count() > 1 {
+        let args: Vec<String> = env::args().skip(1).collect(); // get command line arguments
+        for arg in args {
+            let txt = read_input_file(arg);
+            let code = parse(txt);
+            run(code);
+        }
+    } else {
+        let mut mem = [0u8; MAX_MEM];
+        let mut pos = OFFSET;
+        loop {
+            print!("\n>>> ");
+            std::io::stdout().flush().expect("Err");
+            let mut raw_input = String::new();
+            std::io::stdin().read_line(&mut raw_input).unwrap();
+            let input: String = raw_input.to_lowercase();
+            let str_input: &str = &input;
+            match &str_input {
+                _ if str_input.starts_with("q") => {
+                    break
+                }
+                _ if str_input.starts_with("print") => {
+                    if let Some(start) = str_input.find('(') {
+                        if let Some(end) = str_input.find(')') {
+                            let args_str = &str_input[start + 1..end];
+                            let args: Vec<usize> = args_str.split(',')
+                                .map(|s| s.trim().parse::<usize>().expect("Invalid number"))
+                                .collect();
+                            for i in args[0]..args[1] {
+                                print!("{:?} ", mem[OFFSET+i]);
+                            }
+                        }
+                    }
+                }
+                _ if str_input.starts_with("p") => {
+                    for i in 0..32 {
+                        print!("{:?} ", mem[OFFSET+i]);
+                    }
+                }
+                _ => {
+                    let cst = parse(input);
+                    if cst.len() > 0 {
+                        let eph_mem = mem;
+                        let base_ptr = eph_mem.as_ptr() as usize;
+                        let program = run_with_ptr(cst, eph_mem.as_ptr().wrapping_add(pos) as u64);
+                        unsafe {
+                            let f = transmute::<*mut u8, unsafe fn() -> u64>(program.as_ptr());
+                            let new_pos = f() as usize;
+                            pos = new_pos-base_ptr;
+                        }
+                        mem = eph_mem;
+                    }
+                }
             }
         }
     }
-    // read first arg as file to string
-    let txt: String = read_input_file();
-
-    let mut chars: Vec<char> = txt.chars()
-                                      .collect();
-    // filter out characters not present in COMMANDS
-    chars.retain(|&c| COMMANDS.contains(&c));
-
-    // parse into CST
-    let cst = parse(&mut chars);
-
-    // build & run CST
-    run(cst);
 }
 
