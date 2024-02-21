@@ -310,7 +310,7 @@ fn run(code: Vec<CMD>) {
 }
 
 // build & run CST with external ptr
-fn run_with_ptr(code: Vec<CMD>, pointer: u64) -> ExecutableMemory {
+fn make_program(code: Vec<CMD>, pointer: u64) -> ExecutableMemory {
     // this struct will create and store our code from the CST
     let mut buffer = Buff {
         data: vec![], // where our code is stored
@@ -329,16 +329,24 @@ fn run_with_ptr(code: Vec<CMD>, pointer: u64) -> ExecutableMemory {
 }
 
 fn main() {
+    let mut mem = [0u8; MAX_MEM];
+    let mut pos = OFFSET;
     if env::args().count() > 1 {
         let args: Vec<String> = env::args().skip(1).collect(); // get command line arguments
         for arg in args {
             let txt = read_input_file(arg);
-            let code = parse(txt);
-            run(code);
+            let cst = parse(txt);
+            let eph_mem = mem;
+            let base_ptr = eph_mem.as_ptr() as usize;
+            let program = make_program(cst, eph_mem.as_ptr().wrapping_add(pos) as u64);
+            unsafe {
+                let f = transmute::<*mut u8, unsafe fn() -> u64>(program.as_ptr());
+                let new_pos = f() as usize;
+                pos = new_pos-base_ptr;
+            }
+            mem = eph_mem;
         }
     } else {
-        let mut mem = [0u8; MAX_MEM];
-        let mut pos = OFFSET;
         loop {
             print!("\n>>> ");
             std::io::stdout().flush().expect("Err");
@@ -350,7 +358,7 @@ fn main() {
                 _ if str_input.starts_with("q") => {
                     break
                 }
-                _ if str_input.starts_with("print") => {
+                _ if str_input.starts_with("p(") => {
                     if let Some(start) = str_input.find('(') {
                         if let Some(end) = str_input.find(')') {
                             let args_str = &str_input[start + 1..end];
@@ -373,7 +381,7 @@ fn main() {
                     if cst.len() > 0 {
                         let eph_mem = mem;
                         let base_ptr = eph_mem.as_ptr() as usize;
-                        let program = run_with_ptr(cst, eph_mem.as_ptr().wrapping_add(pos) as u64);
+                        let program = make_program(cst, eph_mem.as_ptr().wrapping_add(pos) as u64);
                         unsafe {
                             let f = transmute::<*mut u8, unsafe fn() -> u64>(program.as_ptr());
                             let new_pos = f() as usize;
