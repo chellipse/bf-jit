@@ -24,12 +24,12 @@ fn get_32bit_offset(jump_from: usize, jump_to: usize) -> u32 {
     if jump_to >= jump_from {
         let diff = jump_to - jump_from;
         // println!("1: {}", diff as i64);
-        return diff as u32;
+        diff as u32
     } else {
         let diff = jump_from - jump_to;
         let diff_unsigned = diff as u32;
         // println!("2: {}", diff_unsigned as i64);
-        return !diff_unsigned.wrapping_sub(1);
+        !diff_unsigned.wrapping_sub(1)
     }
 }
 
@@ -286,29 +286,6 @@ fn show_hex_64(bytes: &Vec<u8>) {
     }
 }
 
-// build & run CST
-fn run(code: Vec<CMD>) {
-    // this struct will create and store our code from the CST
-    let mut buffer = Buff {
-        data: vec![], // where our code is stored
-        jmp_stack: vec![], // used for tracking jmp offsets
-    };
-
-    {
-        // allocate runtime mem
-        let mem: [u8; MAX_MEM] = [0; MAX_MEM];
-        let pointer: u64 = mem.as_ptr().wrapping_add(MAX_MEM/2) as u64;
-        buffer.encode(code, pointer);
-        // show_hex_32(&buffer.data);
-        // copy our program to executable memory
-        let program = ExecutableMemory::with_contents(&buffer.data);
-        unsafe {
-            let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
-            f();
-        }
-    }
-}
-
 // build & run CST with external ptr
 fn make_program(code: Vec<CMD>, pointer: u64) -> ExecutableMemory {
     // this struct will create and store our code from the CST
@@ -321,7 +298,7 @@ fn make_program(code: Vec<CMD>, pointer: u64) -> ExecutableMemory {
     // show_hex_32(&buffer.data);
     // copy our program to executable memory
     let program = ExecutableMemory::with_contents(&buffer.data);
-    return program
+    program
     // unsafe {
     //     let f = transmute::<*mut u8, unsafe fn()>(program.as_ptr());
     //     f();
